@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script type="text/javascript" src="js/three.js/three.js"></script>
+    <script type="text/javascript" src="js/physi/physi.js"></script>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+    <script src="js/Projector.js"></script>
+    <script src="js/TrackBallControls/TrackballControls.js"></script>
+    <script src="js/OrbitControls.js"></script>
+    <script src="js/poolball/threex.poolball.js"></script>
+    <script src="js/ThreeCGS/ThreeCSG.js"></script>
+    <title>Kevin Udacity Project</title>
+</head>
+<body>
+<div id="viewport"></div>
+<script type="text/javascript">
+
+
+    //Global Variables
+    var container, scene, renderer, camera, light;
+    var controls;
+    var WIDTH, HEIGHT, VIEW_ANGLE, ASPECT, NEAR, FAR;
+    var raycaster = new THREE.Raycaster();
+    var objects = [];
+    var mouse = new THREE.Vector2(),
+            offset = new THREE.Vector3(),
+            INTERSECTED, SELECTED;
+    var lineGeometry = new THREE.Geometry();
+    var clock = new THREE.Clock();
+    var actionPlane;
+    var line;
+    var selected_ball = null;
+    var _v3 = new THREE.Vector3;
+    var mouse_position = new THREE.Vector3;
+    var sphere_offset = new THREE.Vector3;
+    var cameraControls;
+
+
+    init();
+
+
+    function init() {
+
+        //Basic setup for physics engine Physijs.
+        Physijs.scripts.worker = 'js/physi/physijs_worker.js';
+        Physijs.scripts.ammo = '../ammo/ammo.js';
+
+        //Get the DOM object from the page where our rendered is going to go.
+        container = $("#viewport")[0];
+
+
+        WIDTH = window.innerWidth,
+                HEIGHT = window.innerHeight;
+
+        VIEW_ANGLE = 45,
+                ASPECT = WIDTH / HEIGHT,
+                NEAR = 1,
+                FAR = 10000;
+        camera = new THREE.PerspectiveCamera(VIEW_ANGLE, ASPECT, NEAR, FAR);
+
+
+        scene = new Physijs.Scene();
+
+        //Make the gravity pull in a -Y direction, this will be "down"
+        scene.setGravity(new THREE.Vector3(0, -200, 0));
+
+        //Need to add a listener so we know something has changed, so the physics engine will recalculate direction/velocity/acceleration etc.
+        //This is where we handle mouse movement with the balls
+        scene.addEventListener('update', function () {
+            scene.simulate(undefined, 2);
+            if (selected_ball != null) {//if there's a ball selected by the user
+
+                //We copy the mouse position to the selected_ball position.
+                //The sphere_offset is so the ball follows the cursor, based on the location the cursor
+                //grabbed the ball from. If you grab the ball at the top, it stays held at the top.
+                _v3.copy(mouse_position).add(sphere_offset).sub(selected_ball.position).multiplyScalar(5);
+                _v3.y = 0;
+                //set the velocity of the mouse movement. T
+                selected_ball.setLinearVelocity(_v3);
+
+            }
+        });
+
+        renderer = new THREE.WebGLRenderer({
+            antialias: true
+        });
+
+        //Ambient light to make the scene a little easier to see
+        scene.add( new THREE.AmbientLight( 0x222222 ) );
+
+        //Create the rendered, and make sure it's using shadows
+        renderer.setSize(WIDTH, HEIGHT);
+        renderer.shadowMapEnabled = true;
+        renderer.shadowMapSoft = true;
+        renderer.shadowMapType = THREE.PCFShadowMap;
+        renderer.shadowMapAutoUpdate = true;
+
+        //Add the renderer to the document
+        container.appendChild(renderer.domElement);
+
+
+        //Setup the camera
+        camera.position.set(100, 80, 120);
+        camera.lookAt(scene.position);
+
+        //Add the camera to the scene
+        scene.add(camera);
+        scene.add( new THREE.AmbientLight( 0x222222 ) );
+
+        //This light dictates how the shadows will look.
+        var dir_light = new THREE.DirectionalLight( 0xFFFFFF );
+        dir_light.position.set( -100, 500, 500 );
+        dir_light.target.position.copy( scene.position );
+        dir_light.castShadow = true;
+        dir_light.shadowCameraLeft = -100;
+        dir_light.shadowCameraTop = -100;
+        dir_light.shadowCameraRight = 100;
+        dir_light.shadowCameraBottom = 100;
+        dir_light.shadowCameraNear = 20;
+        dir_light.shadowCameraFar = 1050;
+        dir_light.shadowBias = -.001
+        dir_light.shadowMapWidth = dir_light.shadowMapHeight = 2048;
+        dir_light.shadowDarkness = .5;
+        scene.add( dir_light );
+
+        //Register our listeners for the mouse events. This allows the user to interact with objects in the scene.
+        renderer.domElement.addEventListener('mousemove', onDocumentMouseMove, false);
+        renderer.domElement.addEventListener('mousedown', onDocumentMouseDown, false);
+        renderer.domElement.addEventListener('mouseup', onDocumentMouseUp, false);
+
+
+
+
+        //create all the content in the scene
+        createPoolBallRack({z: -27,y:3});
+        createCueBall({z: 27,y:3});
+        createPoolTable({x:0,y:0,z:0});
+        createSkyBox();
+
+        //begin rendering
+        render();
+
+        //add controls to allow the user to move the camera around
+        cameraControls = new THREE.OrbitControls(camera, renderer.domElement);
+
+        //This tells Physijs to begin calculating physics in the scene.
+        scene.simulate()
+
+    }//end init
+
+    //The cue ball is unique from the rest of the pool balls. It's slightly smaller in size
+    //but slightly higher in mass. The proportions are taken from real life pool regulations
+    function createCueBall(startPosition) {
+
+        //Start position gives a chance to set a location for the cue ball.
+        startPosition = startPosition || {};
+        startPosition.x = startPosition.x !== undefined ? startPosition.x : 0
+        startPosition.y = startPosition.y !== undefined ? startPosition.y : 0
+        startPosition.z = startPosition.z !== undefined ? startPosition.z : 0
+
+        //THREEx is a minor game engine that has a method for skinning spheres to look like pool balls.
+        //I had to modify the THREEx library to get it to create the full 15 different pool balls.
+        var poolBall = new THREEx.createPoolBall({ballDesc: 'cue'});
+        var poolBallPhysical = new Physijs.SphereMesh(new THREE.SphereGeometry(2.1875, 16, 16),
+
+                Physijs.createMaterial(poolBall.material,
+                        0.4,
+                        1.0),
+                1000
+        );
+
+        //Needs shadows
+        poolBallPhysical.castShadow = true;
+        poolBallPhysical.receiveShadow = true;
+
+        //Set the location
+        poolBallPhysical.position.x = startPosition.x;
+        poolBallPhysical.position.y = startPosition.y;
+        poolBallPhysical.position.z = startPosition.z;
+
+        //Add it to the master list of objects. The master list is important for handling user interaction
+        objects.push(poolBallPhysical);
+
+        //add it to the scene.
+        scene.add(poolBallPhysical);
+
+    }
+
+
+    function createPoolTable() {
+
+        //This is probably the most complicated code, it creates the pool table,
+        //complete with a ball return.
+        var rails = [];
+        var sides = [];
+        var pockets = [];
+
+
+        //Like all good billards tables, ours comes with a felt top
+        var feltTexture = new THREE.ImageUtils.loadTexture("img/Green_Felt.jpg");
+
+        //I with went Lambert material because I wanted the service to have a nice diffuse brightness to it. The balls will have the specular highlights.
+        var felt = new THREE.MeshLambertMaterial({map:feltTexture,color: "#30b032", polygonOffset: true,polygonOffsetFactor:0.2 ,opacity:1.0});
+        var feltSurfaceWidth=52;
+        var feltSurfaceHeight=2;
+        var feltSurfaceDepth=98;
+
+        //A Physijs object is a wapper for THREE.js geometry and materials.
+        var feltSurface = new Physijs.BoxMesh(
+                new THREE.BoxGeometry(feltSurfaceWidth, feltSurfaceHeight, feltSurfaceDepth, 10, 10),
+                Physijs.createMaterial(
+                        felt,
+                        0.8,
+                        0.8
+                ),
+                0
+        );
+        feltSurface.receiveShadow = true;
+
+        //These are our ball pockets. I use the measurements of the felt surface to calculate where to place
+        //each pocket.
+        /*I use ThreeCSG (Three Constructive Solid Geometry) to simplify the pocket creation. What I am doing
+        *is creating the cylinder representation of a pocket. Then I use that cylinder to remove geometry
+        * from the rest of the table, to create an empty space for the balls to pass through the table top.
+        */
+        var pocketPosZs = [feltSurfaceWidth, -feltSurfaceWidth, feltSurfaceWidth, -feltSurfaceWidth];
+        var pocketPosXs = [feltSurfaceWidth/2, feltSurfaceWidth/2, -feltSurfaceWidth/2, -feltSurfaceWidth/2];
+
+        for (var x = 0; x <= 3; x++) {
+
+            var pocketCylinder = new THREE.Mesh(
+                    new THREE.CylinderGeometry(5, 5, 50, 50, 50, false),
+                    new THREE.MeshBasicMaterial({color: 0xFFFFFF, opacity: 1.0, transparent: true})
+            );
+            pocketCylinder.visible = true;
+            pocketCylinder.position.x = pocketPosXs[x];
+            pocketCylinder.position.z = pocketPosZs[x];
+
+            var pocketCylinderBSP = new ThreeBSP(pocketCylinder);
+            //I add the pockets to an array, so I can reuse the geometry for the other table pieces.
+            pockets.push(pocketCylinderBSP);
+
+            //I do not add this object to the scene, I just need it for geometry.
+
+        }
+
+
+        //Here I use the pocket geometry to remove pieces of the felt surface
+        var feltSurfaceBSP = new ThreeBSP(feltSurface);
+
+        //This part removes the pocket geometry using the "subtract" method
+        for (var x = 0; x <= pockets.length - 1; x++) {
+            feltSurfaceBSP = feltSurfaceBSP.subtract(pockets[x]);
+        }
+
+        /*I have to recreate my felt object after I alter the geometry.
+        * I want to improve the code and not have to recreate the object every time.
+        * I didn't realize the removal would be as much of an issue, so I positioned
+        * everything, and THEN realized I needed to run a removal. I need to refactor
+        * this so it measures everything, does a removal, then creates the objects.
+        *
+        * There is a tiny bug with using BoxMesh over a ConcaveMesh. The BoxMesh
+        * does not recognize the pockets as being "missing", so there's a tiny
+        * corner still existing in the pocket, where the ball could "float on air".
+        * It doesn't seem to effect the balls too badly, but I want to fix this.
+        *
+        * Doing the full felt surface as a ConcaveMesh solves this problem, but it
+        * does not interact well with the action plane(see velow). It made handling mouse
+        * events a lot messier, so I decided the tiny corner was a minor enough of an
+        * issue.
+        */
+        feltSurface = new Physijs.BoxMesh(
+                feltSurfaceBSP.toGeometry(),
+                Physijs.createMaterial(
+                        felt,
+                        0.9,
+                        0.1
+                ),
+                0
+        );
+        feltSurface.receiveShadow = true;
+        feltSurface.castShadow= true;
+        scene.add(feltSurface);
+
+
+        /*
+         My Action Plane, or as I've seen it most other places now, the Intersection Plane.
+        This is important to handle mouse events, and raycasting so we can tell which
+        ball the user is clicking on.
+
+        The opacity is set to 0.5, when I was debugging I made the plane visible so I could see it
+        but still see everything else as well. The ConcaveMesh nature of the felt surface is interacting
+        poorly with this plane, and creating mouse errors.
+         */
+        actionPlane = new THREE.Mesh(
+                new THREE.PlaneBufferGeometry(2000, 2000, 8, 8),
+                new THREE.MeshBasicMaterial({color: 0xFFFFFF, opacity: 0.5, transparent: true})
+        );
+        //Can't have it be visible, it's been to be used, not seen.
+        actionPlane.visible = false;
+        actionPlane.rotation.x = Math.PI / -2;
+
+        scene.add(actionPlane);
+
+
+        /*
+        These are the table rails. An important part of any pool table. They are calculated based
+        on the side of the felt surface, then rotated into place. Very similar to the felt surface creation.
+         */
+        var railThickness = 5;
+        var railWidth = [railThickness,railThickness,feltSurfaceWidth-2, feltSurfaceWidth-2];
+        var railHeight = 2.5;
+        var railDepth = [feltSurfaceDepth-2, feltSurfaceDepth-2,railThickness,railThickness];
+        var railPosX = [feltSurfaceWidth/2+railWidth[0]/2, -(feltSurfaceWidth/2+railWidth[1]/2), 0, 0];
+        var railPosZ = [0, 0, feltSurfaceDepth/2+railWidth[0]/2, -(feltSurfaceDepth/2+railWidth[0]/2)];
+
+        for (var x = 0; x <= 3; x++) {
+            var railGeometry = new THREE.BoxGeometry(railWidth[x],railHeight, railDepth[x], 10, 10);
+            var rail = new Physijs.ConcaveMesh(
+                    railGeometry,
+                    Physijs.createMaterial(
+                            felt,
+                            0.2,
+                            1.0
+                    ),
+                    0
+            );
+            rail.receiveShadow = true;
+            rail.castShadow = true;
+            rail.position.y = 2;
+            rail.position.x = railPosX[x];
+            rail.position.z = railPosZ[x];
+            var railBSP = new ThreeBSP(rail);
+            for (var y = 0; y <= pockets.length - 1; y++) {
+                railBSP = railBSP.subtract(pockets[y]);
+            }
+            rail.geometry = railBSP.toGeometry();
+            //TODO: There's gotta be a better way to do this than recreating the object
+            var rail = new Physijs.ConcaveMesh(
+                    railBSP.toGeometry(),
+                    Physijs.createMaterial(
+                            felt,
+                            0.2,
+                            1.0
+                    ),
+                    0
+            );
+
+            rail.receiveShadow = true;
+            rail.castShadow = true;
+            rail.position.y = 2;
+            rail.position.x = railPosX[x];
+            rail.position.z = railPosZ[x];
+            rails.push(rail);
+
+            scene.add(rail);
+        }
+
+        /*
+        This creates the ball return. It's a large box, with a cylinder "carved" out of it, at an angle. It uses
+        a concave mesh, so the gutter functions properly.
+         */
+
+        var ballReturnMat = new THREE.MeshBasicMaterial({color: "#000000", polygonOffset: true,polygonOffsetFactor:0.1,opacity:0.5 });
+        var ballReturn= new Physijs.ConcaveMesh(
+                new THREE.BoxGeometry(feltSurfaceWidth+10, 15, feltSurfaceDepth+10, 10, 10),
+                Physijs.createMaterial(
+                        ballReturnMat,
+                        0.8,
+                        0.8
+                ),
+                0
+        );
+/*
+This is the cylinder I use to remove material from the ball return. It creates a nice gutter for the balls to travel down.
+ This is much easier to create in fictional 3D than would be in real life.
+ */
+        var returnCylinder = new THREE.Mesh(
+                new THREE.CylinderGeometry(33, 50, feltSurfaceDepth+40, 60, 50, false),
+                new THREE.MeshBasicMaterial({color: 0xFFFFFF, opacity: 1.0, transparent: false})
+        );
+        returnCylinder.visible = true;
+        returnCylinder.position.y =20;
+        returnCylinder.rotation.z =Math.PI/2;
+        returnCylinder.rotation.y =Math.PI/2;
+        returnCylinder.rotation.x=Math.PI/25;
+        var returnCylinderBSP = new ThreeBSP(returnCylinder);
+        ballReturn.position.y=-15;
+
+        var ballReturnBSP = new ThreeBSP(ballReturn);
+        ballReturnBSP = ballReturnBSP.subtract(returnCylinderBSP);
+//ConcaveMesh, otherwise it'll react physically like the giant block it was.
+        ballReturn= new Physijs.ConcaveMesh(
+                ballReturnBSP.toGeometry(),
+                Physijs.createMaterial(
+                        ballReturnMat,
+                        0.8,
+                        0.8
+                ),
+                0
+        );
+
+        ballReturn.position.y=-13;
+        ballReturn.rotation.x=Math.PI/50;
+        scene.add(ballReturn);
+
+
+        /*
+        Side, with a predetermined thickness. I calculate out the positions, and other sizes, based off
+        what's there. I think the thickness should be a proportion, so it'll be a resizeable table.
+        I'll get that in version 2.0
+         */
+        var sideThickness=30;
+        var sideDepth = [feltSurfaceDepth+sideThickness, feltSurfaceDepth+sideThickness, 10, 10];
+        var sideWidth = [10,10,sideThickness,sideThickness];
+        var sideHeight = [sideThickness,sideThickness,feltSurfaceWidth+5,feltSurfaceWidth+5];
+        var sidePosX = [railPosX[0]+sideWidth[0]/2, railPosX[1]-sideWidth[1]/2, 0, 0]
+
+        var sidePosZ = [0, 0, feltSurfaceDepth/2+railThickness*2, -(feltSurfaceDepth/2+railThickness*2)];
+        var sidePosY = [];
+
+        var sideRotZ = [0, 0, -Math.PI / 2, -Math.PI / 2]; //rotate to make the textures better
+        var woodTexture = new THREE.ImageUtils.loadTexture("img/dark_wood.png");
+        var sideMaterial = new THREE.MeshLambertMaterial({map:woodTexture});
+        for (var x = 0; x <= 3; x++) {
+            var sideGeometry = new THREE.BoxGeometry(sideWidth[x], sideHeight[x], sideDepth[x], 10, 10);
+            var side = new Physijs.ConcaveMesh(
+                    sideGeometry,
+                    Physijs.createMaterial(
+                            sideMaterial,
+                            0.2,
+                            1.0
+                    ),
+                    0
+            );
+
+            side.position.y = -sideThickness/2+5 //The +5 is to give it the lip above the felt surface. This should be a proportion relative to the ball size.
+            side.position.x = sidePosX[x];
+            side.position.z = sidePosZ[x];
+            side.rotation.z = sideRotZ[x];
+            sides.push(side);
+            var sideBSP = new ThreeBSP(side);
+            for (var y = 0; y <= pockets.length - 1; y++) {
+
+                sideBSP = sideBSP.subtract(pockets[y]);
+
+            }
+            //If x==2, so our third side. The way the arrays are made, this is the side I chose to have the ball return on
+            /*
+            It's the same as the pocket cylinders, it removes a block of space for an opening. I could have built the side out of four
+            blocks, but for simplicity I just removed a piece instead.
+
+            This looks cleaner in code, I'm not sure about overall performance.
+
+             */
+            if(x==2)
+            {
+                var ballReturnOpening = new THREE.Mesh(
+                        new THREE.BoxGeometry(sideWidth[x],7.5,sideDepth[x]),
+                        new THREE.MeshBasicMaterial({color: 0xFFFFFF, opacity: 1.0, transparent: true})
+                );
+                ballReturnOpening.position.x = side.position.x;
+                ballReturnOpening.position.y=side.position.y-5; //-5 is just a fudge factor. It should be calculated, I just adjusted it until it looked good.
+                ballReturnOpening.position.z=side.position.z;
+                var ballReturnOpeningBSP = new ThreeBSP(ballReturnOpening);
+                sideBSP = sideBSP.subtract(ballReturnOpeningBSP);
+            }
+            //TODO: There must be a better way than to recreate the object
+            var side = new Physijs.ConcaveMesh(
+                    sideBSP.toGeometry(),
+                    Physijs.createMaterial(
+                            sideMaterial,
+                            0.2,
+                            1.0
+                    ),
+                    0
+            );
+            side.receiveShadow = true;
+            side.castShadow = true;
+            side.position.y = -sideThickness/2+5;
+            side.position.x = sidePosX[x];
+            side.position.z = sidePosZ[x];
+            side.rotation.z = sideRotZ[x];
+
+            scene.add(side);
+
+        }
+
+    }
+
+
+
+    function createPoolBallRack(startPosition) {
+
+        //This function creates the pool balls on the table. It will create them in the triangle rack
+        //formation commonly used in 8-ball pool.
+
+        //The rack can be positioned, otherwise it defaults to 0 for all values.
+        startPosition = startPosition || {};
+        startPosition.x = startPosition.x !== undefined ? startPosition.x : 0
+        startPosition.y = startPosition.y !== undefined ? startPosition.y : 0
+        startPosition.z = startPosition.z !== undefined ? startPosition.z : 0
+
+
+        for (var poolBallCount = 1;poolBallCount  <= 15; poolBallCount++) {
+
+
+            var isStriped = false;
+
+            if (poolBallCount > 8) {
+                isStriped = true;
+            }
+
+            var poolBall = new THREEx.createPoolBall({ballDesc:poolBallCount , striped: isStriped});
+            var poolBallPhysical = new Physijs.SphereMesh(new THREE.SphereGeometry(2.1875, 16, 16),
+
+                    Physijs.createMaterial(poolBall.material,
+                            0.8,
+                            0.1),
+                    916
+            );
+            poolBallPhysical.castShadow = true;
+            poolBallPhysical.receiveShadow = true;
+            poolBallPhysical.position.x = startPosition.x;
+            poolBallPhysical.position.y = startPosition.y;
+            poolBallPhysical.position.z = startPosition.z;
+
+            //This code creates the triangle.
+            //It arranges the balls in rows of 5,4,3,2 and 1.
+            if (poolBallCount <= 5) {
+
+            } else if ( poolBallCount<= 9 && poolBallCount < 12) {
+                poolBallPhysical.position.z += 2.3;
+            } else if (poolBallCount <= 12 && poolBallCount < 14) {
+
+                poolBallPhysical.position.z += 4.5;
+            } else if (poolBallCount <= 14 && poolBallCount < 15) {
+
+                poolBallPhysical.position.z += 6.7;
+            } else if (poolBallCount <= 15) {
+
+                poolBallPhysical.position.z += 8.9;
+            }
+            scene.add(poolBallPhysical);
+            objects.push(poolBallPhysical);
+        }
+
+    }//end createPoolBallRack
+    function render() {
+        for (var i = 15; i < scene.children.length - 5; i++) {
+            var obj = scene.children[i];
+
+            if (obj.position.y <= -50) {
+                scene.remove(obj);
+            }
+        }
+        renderer.render(scene, camera);
+        requestAnimationFrame(render);
+    }
+    function createSkyBox() {
+//This is a simple sky box, to make the scene look a little more interesting.
+        //The images are a little low resolution, but I don't have the software to make
+        //a good skybox.
+
+        var materialArray = [];
+        materialArray.push(new THREE.MeshBasicMaterial({
+            map: THREE.ImageUtils.loadTexture('skybox/space/cwd_rt.JPG'),
+            side: THREE.BackSide
+        }));
+        materialArray.push(new THREE.MeshBasicMaterial({
+            map: THREE.ImageUtils.loadTexture('skybox/space/cwd_lf.JPG'),
+            side: THREE.BackSide
+        }));
+        materialArray.push(new THREE.MeshBasicMaterial({
+            map: THREE.ImageUtils.loadTexture('skybox/space/cwd_ft.JPG'),
+            side: THREE.BackSide
+        }));
+        materialArray.push(new THREE.MeshBasicMaterial({
+            map: THREE.ImageUtils.loadTexture('skybox/space/cwd_bk.JPG'),
+            side: THREE.BackSide
+        }));
+        materialArray.push(new THREE.MeshBasicMaterial({
+            map: THREE.ImageUtils.loadTexture('skybox/space/cwd_up.JPG'),
+            side: THREE.BackSide
+        }));
+        materialArray.push(new THREE.MeshBasicMaterial({
+            map: THREE.ImageUtils.loadTexture('skybox/space/cwd_dn.JPG'),
+            side: THREE.BackSide
+        }));
+
+        var skyboxMaterial = new THREE.MeshFaceMaterial(materialArray);
+        var skyboxGeom = new THREE.BoxGeometry(5000, 5000, 5000, 1, 1, 1);
+        var skybox = new THREE.Mesh(skyboxGeom, skyboxMaterial);
+        scene.add(skybox);
+    }
+
+    function onDocumentMouseMove(event) {
+//Translate the mouses' movement to the object,
+        //and move it around the screen
+
+        var ray, intersection;
+        var _vector = new THREE.Vector3;
+        if (selected_ball !== null) {
+//get the mouse position
+            _vector.set(
+                    ( event.clientX / window.innerWidth ) * 2 - 1,
+                    -( event.clientY / window.innerHeight ) * 2 + 1,
+                    1
+            );
+            _vector.unproject(camera);
+
+            ray = new THREE.Raycaster(camera.position, _vector.sub(camera.position).normalize());
+            intersection = ray.intersectObject(actionPlane);
+            mouse_position.copy(intersection[0].point);
+
+        }
+
+    }
+
+
+    function onDocumentMouseDown(event) {
+/*
+To handle mouse clicks, we first need to determine the cursor position in 2D space (X and Y value).
+event.clientX & event.clientY will give us pixes coordinates for the mouse position.
+
+We then need to fire the ray from the camera's perspective into the 3D world.
+Fortunately THREE.js has a function to fire the 2D vector into the 3D world.
+
+Unproject will handle the work of calculating the correct vector translation into
+3D.
+ */
+
+        var ray, intersections;
+
+        var handleMouseDown, handleMouseMove, handleMouseUp;
+        var _vector = new THREE.Vector3;
+        _vector.set(
+                ( event.clientX / window.innerWidth ) * 2 - 1,
+                -( event.clientY / window.innerHeight ) * 2 + 1,
+                1
+        );
+
+
+        _vector.unproject(camera);
+
+        /*
+        When we have our translated vector, we create a ray from the camera
+         */
+        ray = new THREE.Raycaster(camera.position, _vector.sub(camera.position).normalize());
+
+        //Find out what this ray hits. In this case we're comparing it to our objects.
+        //I don't want to worry about clicks to the felt/table etc. So this only
+        //compares it to balls in the objects array.
+        intersections = ray.intersectObjects(objects);
+
+        if (intersections.length > 0) { //if we actually hit something with the ray
+
+            //Now I want to turn off the camera controls, otherwise the camera will move
+            //when trying to move the ball
+            cameraControls.enabled = false;
+
+            //get the ball that was hit
+            selected_ball = intersections[0].object;
+
+            //set our temp vector to 0
+            _vector.set(0, 0, 0);
+            //set the ball motion to nothing
+            selected_ball.setAngularFactor(_vector);
+            selected_ball.setAngularVelocity(_vector);
+            selected_ball.setLinearFactor(_vector);
+            selected_ball.setLinearVelocity(_vector);
+            //copy the calculated point in space to the ball
+            mouse_position.copy(intersections[0].point);
+            sphere_offset.subVectors(selected_ball.position, mouse_position);
+
+            //Move the plane to match the mouse. This matters when trying to grab balls that are not
+            //on the starting plane, near the surface of the table.
+            actionPlane.position.y = mouse_position.y;
+        }
+    }
+
+    function onDocumentMouseUp(event) {
+
+        //The user lets go of the mouse, we need to make sure
+        //the velocity and direction are copied into the
+        //ball
+
+
+        var _vector = new THREE.Vector3;
+
+        if (selected_ball !== null) { //make sure we have a selected ball
+            _vector.set(1, 1, 1);
+            //set the direction
+            selected_ball.setAngularFactor(_vector);
+            selected_ball.setLinearFactor(_vector);
+//unselect the ball
+            selected_ball = null;
+        }
+
+        //reactivate camera controls
+        cameraControls.enabled = true;
+
+    }
+</script>
+
+
+</body>
+</html>
